@@ -1,5 +1,5 @@
 @echo off
 pushd ..\build
-      REM server.exe
-      client.exe
+      server.exe
+      REM client.exe
 popd

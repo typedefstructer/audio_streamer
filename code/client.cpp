@@ -91,7 +91,7 @@ void PlayBack(char *Capture, int RecIndex, int BufferSize)
 	DWORD WriteCursor;
 	DWORD LockBytes, RegionSize;
 		
-	GlobalSecondaryBuffer->GetCurrentPosition(&PlayCursor, &WriteCursor);	
+u	GlobalSecondaryBuffer->GetCurrentPosition(&PlayCursor, &WriteCursor);	
 	if(WriteCursor >= PlayCursor)
 	{
 		LockBytes  = WriteCursor;
@@ -312,7 +312,7 @@ int WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLine, int CmdSh
 		*Out++ = val;
 	}
 
-	float Valu = 1.0f;
+	float Valu = 80.0f;
 	Win32AllocBitmapBuffer(&GlobalBitmapBuffer, 400, 200);	  
 	while(AppRunning)
 	{
