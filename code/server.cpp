@@ -25,8 +25,11 @@ typedef uint64_t u64;
 typedef float  r32;
 typedef double r64;
 
+#include "unifft.cpp"
+
 typedef u32 b32;
 typedef LRESULT CALLBACK window_procedure(HWND , UINT, WPARAM, LPARAM);
+
 
 struct win32_window_dimension
 {
@@ -65,7 +68,7 @@ void Win32AllocBitmapBuffer(win32_bitmap_buffer *Buffer, int Width, int Height)
 	{
 		VirtualFree(Buffer->Memory, 0, MEM_RELEASE);		
 	}
-
+	
 	Buffer->Info = {};
 	Buffer->Info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
 	Buffer->Info.bmiHeader.biWidth = Width;
@@ -227,7 +230,7 @@ void RenderSound(LPDIRECTSOUNDBUFFER SoundBuffer, s16 *Buffer, int SampleCount, 
 			*Sample++ = 0;
 			*Sample++ = 0;
 		}
-		PlayBackIndex++;
+		PlayBackIndex += 2;
 	}
 
 	Sample = (s16*)Region2;
@@ -243,13 +246,13 @@ void RenderSound(LPDIRECTSOUNDBUFFER SoundBuffer, s16 *Buffer, int SampleCount, 
 			*Sample++ = 0;
 			*Sample++ = 0;
 		}
-		PlayBackIndex++;
+		PlayBackIndex += 2;
 	}
 
     SoundBuffer->Unlock(Region1, Region1Bytes, Region2, Region2Bytes);	
 }
 
-void RecordMic(LPDIRECTSOUNDCAPTUREBUFFER MicBuffer, s16 *Buffer, int BufferSize)
+void RecordMic(LPDIRECTSOUNDCAPTUREBUFFER MicBuffer, s16 *Buffer, int BufferSize, s32 *Count)
 {
 	void *Region1, *Region2;
 	DWORD Region1Bytes, Region2Bytes;
@@ -274,7 +277,8 @@ void RecordMic(LPDIRECTSOUNDCAPTUREBUFFER MicBuffer, s16 *Buffer, int BufferSize
 	for(int i=0;i<Region1Bytes/4;i++)
 	{
 		*Buffer++ = *MicIn++;
-		*Buffer++ = *MicIn++;
+		*Buffer++ = *MicIn++;		
+		*Count += 2;		
 	}
 
 	MicIn = (s16*)Region2;
@@ -282,7 +286,9 @@ void RecordMic(LPDIRECTSOUNDCAPTUREBUFFER MicBuffer, s16 *Buffer, int BufferSize
 	{
 		*Buffer++ = *MicIn++;
 		*Buffer++ = *MicIn++;
+		*Count += 2;		
 	}
+
 	
 	MicBuffer->Unlock(Region1, Region1Bytes, Region2, Region2Bytes);
 }
@@ -294,7 +300,14 @@ void DrawRect(win32_bitmap_buffer *Buffer, r32 RMinX, r32 RMinY, r32 RMaxX, r32 
 	s32 MaxX = RMaxX;
 	s32 MinY = RMinY;
 	s32 MaxY = RMaxY;
-	
+
+	MinY = Buffer->Height - MinY;
+	MaxY = Buffer->Height - MaxY;
+
+
+	s32 Tmp = MinY;
+	MinY = MaxY;
+	MaxY = Tmp;
 	
 	// printf("%d %d\n", MinY, MaxY);
 	if(MinX < 0)
@@ -355,15 +368,16 @@ void DrawRect(win32_bitmap_buffer *Buffer, r32 RMinX, r32 RMinY, r32 RMaxX, r32 
 	}	
 }
 void RenderWave(win32_bitmap_buffer *Buffer, s16 *Wave, s32 WaveSize,
-				s32 Spread, s32 OffSetY, r32 RR, r32 GG, r32 BB)	
+				s32 Size, s32 Spread, s32 OffSetY, r32 RR, r32 GG, r32 BB,
+				s32 ScaleX, s32 ScaleY)	
 {	
 	for(s32 i = 0; i<WaveSize; i++)
 	{
-		r32 fBx = (r32)i*(((r32)Buffer->Width*Spread)/(r32)WaveSize);
-		r32 fBy = (r32)Wave[i]*((((r32)Buffer->Height/2))/(r32)pow(2, 16));
+		r32 fBx = (r32)i*(((r32)ScaleX*Spread)/(r32)WaveSize);
+		r32 fBy = (r32)Wave[i]*((((r32)ScaleY))/(r32)pow(2, 16));
 		
 		fBy += OffSetY;		
-		DrawRect(Buffer, fBx, fBy, fBx+10, fBy+10, RR, GG, BB);
+		DrawRect(Buffer, fBx, fBy, fBx+Size, fBy+Size, RR, GG, BB);
 	}
 }
 
@@ -388,6 +402,129 @@ WindowProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
 	return result;
 }
 
+
+void Zero(s8 *Buffer, s32 BufferSize)
+{
+	for(int i=0;i<BufferSize;i++)
+	{
+		Buffer[i] = 0;
+	}
+}
+
+void Copy(s8 *Out, s8 *In, s32 BufferSize)
+{
+	for(int i=0;i<BufferSize;i++)
+	{
+		Out[i] = In[i];
+	}
+}
+
+#define LOWFREQ 3000
+#define HIGHFREQ 30000
+
+void FFT(s16 *Out, s16 *In, s32 SampleCount)
+{
+	double *A_re, *A_im, *W_re, *W_im;
+	double *A_ma;
+	
+	int n = pow(2, ceil(log(SampleCount)/log(2)));
+		
+	A_re = (double*)malloc(sizeof(double)*n); 
+	A_im = (double*)malloc(sizeof(double)*n); 
+	A_ma = (double*)malloc(sizeof(double)*n); 
+	W_re = (double*)malloc(sizeof(double)*n/2); 
+	W_im = (double*)malloc(sizeof(double)*n/2);
+	
+	
+	Zero((s8*)A_re, sizeof(double)*n);
+	Zero((s8*)A_im, sizeof(double)*n);
+
+	for(int i=0;i<SampleCount;i++)
+	{
+		A_re[i] = In[i];
+	}
+
+	
+	compute_W(n, W_re, W_im);
+	fft(n, A_re, A_im, W_re, W_im);
+	permute_bitrev(n, A_re, A_im);
+
+	for(int i=0;i<n;i++)
+	{
+		A_re[i] = A_re[i]/n;
+		A_im[i] = A_im[i]/n;
+		A_ma[i] = sqrt(A_re[i]*A_re[i] + A_im[i]*A_im[i])*100;
+	}
+		
+	for(int i=0;i<n;i++)
+	{
+		Out[i] = A_ma[i];
+		//if(i<n/3 || i > 2*n/3) Out[i] = 0;		
+	}
+	
+	free(A_re);
+	free(A_ma);
+	free(A_im); 
+	free(W_re); 
+	free(W_im); 
+}
+
+void IFFT(s16 *Out, s16 *In, s16* Ift, s32 SampleCount)
+{
+	double *A_re, *A_im, *W_re, *W_im;
+	double *A_ma;
+	
+	int n = pow(2, ceil(log(SampleCount)/log(2)));
+		
+	A_re = (double*)malloc(sizeof(double)*n); 
+	A_im = (double*)malloc(sizeof(double)*n); 
+	A_ma = (double*)malloc(sizeof(double)*n); 
+	W_re = (double*)malloc(sizeof(double)*n/2); 
+	W_im = (double*)malloc(sizeof(double)*n/2);
+	
+	
+	Zero((s8*)A_re, sizeof(double)*n);
+	Zero((s8*)A_im, sizeof(double)*n);
+	
+	for(int i=0;i<SampleCount;i++)
+	{		
+		A_re[i] = In[i];					
+	}
+	
+	compute_W(n, W_re, W_im);
+	fft(n, A_re, A_im, W_re, W_im);			
+	permute_bitrev(n, A_re, A_im);
+
+	for(int i=0;i<n;i++)
+	{
+		if(i<n/3 || i > 2*n/3)
+		// if(i < (n/3 + n/9) || i > (2*n/3 - n/9))
+			A_re[i] = A_im[i] = 0; 
+	}
+	
+	fft(n, A_re, A_im, W_re, W_im);
+	permute_bitrev(n, A_re, A_im);
+	
+	for(int i=0;i<n;i++)
+	{
+		A_re[i] = A_re[i]/(n/2);
+		A_im[i] = -A_im[i]/(n/2);
+	    A_ma[i] = A_re[i]+A_im[i];		
+	}
+	
+	for(int i=0;i<SampleCount;i++)
+	{
+		Out[i] = A_ma[n-i]*5;
+		Ift[i] = Out[i];
+	}
+		
+	free(A_re);
+	free(A_ma);
+	free(A_im); 
+	free(W_re); 
+	free(W_im); 	
+}
+
 int WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLine, int CmdShow)
 {	
 	HWND Window = GetWindow("nlife-class", "sound-server", 1920, 1080, WindowProc);
@@ -396,8 +533,7 @@ int WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLine, int CmdSh
 	LPDIRECTSOUNDBUFFER Speaker;
 	LPDIRECTSOUNDCAPTUREBUFFER Mic;
 	win32_bitmap_buffer BitmapBuffer;
-	
-	
+		
 	InitSocket();	
 	InitDSoundSpeakers(Window, BufferSize, &Speaker);
 	InitDSoundMic(BufferSize, &Mic);
@@ -408,11 +544,14 @@ int WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLine, int CmdSh
 	MSG Message;
 	AppRunning = true;
 
-	char Capture[BufferSize];
-	r32 P = 1;
-
+	s8 Capture[BufferSize];
+	s8 Raw[BufferSize];
+	s8 Fourier[BufferSize];
+	s8 Inverse[BufferSize];
+		
 	Mic->Start(DSCBSTART_LOOPING);
 	Speaker->Play(0, 0, DSBPLAY_LOOPING);
+	int i=0, j;
 	while(AppRunning)
 	{
 		while(PeekMessage(&Message, 0, 0, 0, PM_REMOVE) > 0)
@@ -420,36 +559,65 @@ int WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLine, int CmdSh
 			TranslateMessage(&Message);
 			DispatchMessage(&Message);
 		}
+
+		Zero(Capture, BufferSize);
+		Zero(Fourier, BufferSize);
+		Zero(Inverse, BufferSize);
+				
+		s32 SampleCount = 0;
+		RecordMic(Mic, (s16*)Capture, BufferSize, &SampleCount);		
+		Copy(Raw, Capture, BufferSize);
 		
-		s16 *Out = (s16*)Capture;	
-		for(int i=0;i<BufferSize/4;i++)
-		{
-			r32 val = sin((r32)i/P)*4000;
-			*Out++ = val;
-			*Out++ = val;
-		}
-		P += 1.0f;
-		if(P > 100) P =  1;
+		int n = pow(2, ceil(log(SampleCount)/log(2)));
+		s16 *Ft = (s16*)malloc(n*sizeof(s16));
+		s16 *IFt = (s16*)malloc(n*sizeof(s16));
 		
-		RecordMic(Mic, (s16*)Capture, BufferSize);		
+		FFT(Ft, (s16*)Raw, SampleCount);
+		IFFT((s16*)Inverse, (s16*)Raw, IFt, SampleCount);	   
 
 		DrawRect(&BitmapBuffer, 0, 0, BitmapBuffer.Width, BitmapBuffer.Height, 0, 0, 0);
-		RenderWave(&BitmapBuffer, (s16*)Capture, BufferSize/4, 10,
-				   BitmapBuffer.Height/2, 1.0f, 0.0f, 0.0f);
+
+
+		r32 LxO = n/3;
+		r32 HxO = 2*n/3;
 		
-		RenderWave(&BitmapBuffer, (s16*)Capture, BufferSize/4, 1,
-				   200, 1.0f, 0.0f, 1.0f);
+		r32 LX = LxO*((r32)BitmapBuffer.Width/(r32)n);
+		r32 HX = HxO*((r32)BitmapBuffer.Width/(r32)n);
+		r32 SX = SampleCount*((r32)BitmapBuffer.Width/(r32)n);
 
 		
 		
+		DrawRect(&BitmapBuffer, LX, 0,
+				 LX+1, BitmapBuffer.Height, 1, 1, 1);
+		
+		DrawRect(&BitmapBuffer, HX, 0,
+				 HX+1, BitmapBuffer.Height, 1, 1, 1);
+
+		// DrawRect(&BitmapBuffer, SX, 0,
+				 // SX+1, BitmapBuffer.Height, 0, 1, 1);
+
+		
+		RenderWave(&BitmapBuffer, (s16*)Capture, SampleCount, 10, 20,
+				   BitmapBuffer.Height-200, 1.0f, 0.0f, 0.0f,
+				   BitmapBuffer.Width, BitmapBuffer.Height);		
+
+		RenderWave(&BitmapBuffer, (s16*)Ft, n, 5, 1,
+				   20, 1.0f, 0.0f, 1.0f, BitmapBuffer.Width, BitmapBuffer.Height);
+
+		RenderWave(&BitmapBuffer, (s16*)IFt, n, 5, 10,
+				   BitmapBuffer.Height/2, 1.0f, 1.0f, 0.0f, BitmapBuffer.Width,
+				   BitmapBuffer.Height);
+
+		free(Ft);
+		free(IFt);
 		HDC DeviceContext = GetDC(Window);
 		{
 			win32_window_dimension Dimension = Win32WindowDimension(Window);
 			Win32BlitBitmap(DeviceContext, &BitmapBuffer, Dimension.Width, Dimension.Height);
-		}		
-		ReleaseDC(Window, DeviceContext);
+		}
 		
-		RenderSound(Speaker, (s16*)Capture, BufferSize/4, BufferSize);
+		ReleaseDC(Window, DeviceContext);		
+		RenderSound(Speaker, (s16*)Inverse, SampleCount, BufferSize);
 	}
 
 	WSACleanup();
