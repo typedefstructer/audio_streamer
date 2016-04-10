@@ -1,5 +1,4 @@
 @echo off
 pushd ..\build
-      server.exe
-      REM client.exe
+      silento.exe
 popd
